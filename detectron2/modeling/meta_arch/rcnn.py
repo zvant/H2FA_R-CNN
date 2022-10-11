@@ -164,8 +164,11 @@ class GeneralizedRCNN(nn.Module):
         """
         if not self.training:
             return self.inference(batched_inputs)
+        #print(len(batched_inputs))
+        #for im in batched_inputs: print(im['file_name'], im['image'].size(), len(im['instances'].gt_classes))
 
         images = self.preprocess_image(batched_inputs)
+        assert 0 == (len(images) % 2)
         if "instances" in batched_inputs[0]:
             gt_instances = [x["instances"].to(self.device) for x in batched_inputs]
         else:
@@ -375,10 +378,10 @@ class GlobalDAHead(nn.Module):
             in_channels = 2048
         elif 'res4' in backbone_out_shape.keys():
             in_channels = 1024
-        elif 'plain5' in backbone_out_shape.keys():
-            in_channels = 512
+        elif 'p5' in backbone_out_shape.keys():
+            in_channels = 256
         else:
-            raise KeyError("Unknown backbone output name: {}".format(backbone_out_shape.keys()))
+            raise KeyError("Unknown backbone output name: {} (acceptable: res5, res4, p5)".format(backbone_out_shape.keys()))
 
         self.da_conv1 = nn.Conv2d(in_channels, 512, kernel_size=3, stride=2, padding=1, bias=False)
         self.da_conv2 = nn.Conv2d(512, 128, kernel_size=3, stride=2, padding=1, bias=False)
@@ -394,6 +397,7 @@ class GlobalDAHead(nn.Module):
 
     def forward(self, x):
         x = self.grl(x)
+        #print('GlobalDAHead', x.size())
 
         x = F.dropout(F.relu(self.da_bn1(self.da_conv1(x))), training=self.training)
         x = F.dropout(F.relu(self.da_bn2(self.da_conv2(x))), training=self.training)
@@ -420,11 +424,11 @@ class LocalDAHead(nn.Module):
         super(LocalDAHead, self).__init__()
         if 'res2' in backbone_out_shape.keys():
             in_channels = 256
-        elif 'plain2' in backbone_out_shape.keys():
-            in_channels = 128
+        elif 'p2' in backbone_out_shape.keys():
+            in_channels = 256
         else:
             print(backbone_out_shape.keys())
-            raise KeyError("Unknown backbone output name: {}".format(backbone_out_shape.keys()))
+            raise KeyError("Unknown backbone output name: {} (acceptable: res2, p2)".format(backbone_out_shape.keys()))
 
         self.da_conv1 = nn.Conv2d(in_channels, 256, kernel_size=1, stride=1, padding=0, bias=False)
         self.da_conv2 = nn.Conv2d(256, 128, kernel_size=1, stride=1, padding=0, bias=False)
@@ -449,6 +453,7 @@ class LocalDAHead(nn.Module):
         normal_init(self.da_conv3, 0, 0.01)
 
     def forward(self, x):
+        #print('LocalDAHead', x.size())
         x = self.grl(x)
 
         x = F.relu(self.da_conv1(x))
@@ -474,16 +479,17 @@ class CAMHead(nn.Module):
             in_channels = 2048
         elif 'res4' in backbone_out_shape.keys():
             in_channels = 1024
-        elif 'plain5' in backbone_out_shape.keys():
-            in_channels = 512
+        elif 'p5' in backbone_out_shape.keys():
+            in_channels = 256
         else:
-            raise KeyError("Unknown backbone output name: {}".format(backbone_out_shape.keys()))
+            raise KeyError("Unknown backbone output name: {} (acceptable: res5, res4, p5)".format(backbone_out_shape.keys()))
         self.num_classes = num_classes
 
         self.cam_conv = nn.Conv2d(in_channels, self.num_classes, kernel_size=1, bias=False)
         weight_init.c2_msra_fill(self.cam_conv)
 
     def forward(self, x, gt_instances):
+        #print('CAMHead', x.size())
         x = self.cam_conv(x)
 
         logits = F.avg_pool2d(x, (x.size(2), x.size(3)))
