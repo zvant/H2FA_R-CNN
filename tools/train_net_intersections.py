@@ -236,11 +236,11 @@ def main(args):
     cfg.MODEL.WEIGHTS = ckpt_path
     cfg.DATASETS.TRAIN_SOURCE = ('mscoco2017_train_remap',)
     cfg.DATASETS.TRAIN = (dst_pseudo,)
-    cfg.DATASETS.TEST = (dst_manual,) # debug
-    #cfg.DATASETS.TEST = ('mscoco2017_valid_remap', dst_manual)
+    #cfg.DATASETS.TEST = (dst_manual,) # debug
+    cfg.DATASETS.TEST = ('mscoco2017_valid_remap', dst_manual)
 
-    iters, eval_interval, cfg.SOLVER.IMS_PER_BATCH = 100, 51, 1 # debug
-    #iters, eval_interval = 20000, 4010
+    #iters, eval_interval, cfg.SOLVER.IMS_PER_BATCH = 100, 51, 1 # debug
+    iters, eval_interval = 20000, 4010
     lr, num_workers = 1e-4, 4
 
     cfg.DATALOADER.NUM_WORKERS = num_workers
@@ -273,8 +273,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Adaptation Script')
     parser.add_argument('--opt', type=str, help='option')
     parser.add_argument('--id', type=str, help='video ID')
-    #parser.add_argument('--ddp_num_gpus', type=int, default=1)
-    #parser.add_argument('--ddp_port', type=int, default=50152)
+    parser.add_argument('--ddp_num_gpus', type=int, default=1)
+    parser.add_argument('--ddp_port', type=int, default=50152)
     args = parser.parse_args()
 
-    main(args)
+    if args.ddp_num_gpus > 1:
+        launch(main, args.ddp_num_gpus, num_machines=1, machine_rank=0, dist_url='tcp://127.0.0.1:%d' % args.ddp_port, args=(args,))
+    else:
+        main(args)
