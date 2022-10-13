@@ -22,6 +22,7 @@ You may want to write your own script with your datasets and other customization
 import logging
 import os
 import json
+import random
 import gzip
 from collections import OrderedDict
 import torch
@@ -49,6 +50,7 @@ except AttributeError:
 
 cocodir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', 'MSCOCO2017'))
 intersections_basedir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', '..', 'Intersections'))
+video_id_list = ['001', '003', '005', '006', '007', '008', '009', '011', '012', '013', '014', '015', '016', '017', '019', '020', '023', '025', '027', '034', '036', '039', '040', '043', '044', '046', '048', '049', '050', '051', '053', '054', '055', '056', '058', '059', '060', '066', '067', '068', '069', '070', '071', '073', '074', '075', '076', '077', '080', '085', '086', '087', '088', '090', '091', '092', '093', '094', '095', '098', '099', '105', '108', '110', '112', '114', '115', '116', '117', '118', '125', '127', '128', '129', '130', '131', '132', '135', '136', '141', '146', '148', '149', '150', '152', '154', '156', '158', '159', '160', '161', '164', '167', '169', '170', '171', '172', '175', '178', '179']
 thing_classes_coco = [['person'], ['car', 'bus', 'truck']]
 thing_classes = ['person', 'vehicle']
 assert len(thing_classes_coco) == len(thing_classes)
@@ -104,6 +106,26 @@ def get_pseudo_dicts(args):
     return dict_json
 
 
+def all_pseudo_dicts(args, total_images):
+    random.seed(42)
+    images_per_video_cap = int(total_images / len(video_id_list))
+    dict_json_all, id_back = [], args.id
+    for v in video_id_list:
+        args.id = v
+        dict_json_v = get_pseudo_dicts(args)
+        if len(dict_json_v) > images_per_video_cap:
+            print('randomly drop images: %d => %d' % (len(dict_json_v), images_per_video_cap))
+            random.shuffle(dict_json_v)
+            dict_json_v = dict_json_v[:images_per_video_cap]
+            dict_json_v.sort(key=lambda x: x['file_name'])
+        dict_json_all = dict_json_all + dict_json_v
+    args.id = id_back
+    for i in range(0, len(dict_json_all)):
+        dict_json_all[i]['image_id'] = i + 1
+    print('all videos %d images' % len(dict_json_all))
+    return dict_json_all
+
+
 def get_manual_dicts(args):
     inputdir = os.path.join(intersections_basedir, 'images', 'annotated', args.id)
     with open(os.path.join(inputdir, 'annotations.json'), 'r') as fp:
@@ -113,6 +135,18 @@ def get_manual_dicts(args):
         annotations[i]['image_id'] = i + 1
     print('manual annotation for %s: %d images, %d bboxes' % (args.id, len(annotations), sum(list(map(lambda x: len(x['annotations']), annotations)))))
     return annotations
+
+
+def all_annotation_dicts(args):
+    annotations_all, id_back = [], args.id
+    for v in video_id_list:
+        args.id = v
+        annotations_all = annotations_all + get_manual_dicts(args)
+    args.id = id_back
+    for i in range(0, len(annotations_all)):
+        annotations_all[i]['image_id'] = i + 1
+    print('manual annotation for all videos: %d images, %d bboxes' % (len(annotations_all), sum(list(map(lambda x: len(x['annotations']), annotations_all)))))
+    return annotations_all
 
 
 class Trainer(DefaultTrainer):
@@ -150,7 +184,7 @@ class Trainer(DefaultTrainer):
         """
         loss_dict = self.model(data+source_data)
         losses = sum(loss_dict.values())
-    
+
         """
         If you need to accumulate gradients or do something similar, you can
         wrap the optimizer with your custom `zero_grad()` method.
@@ -177,7 +211,7 @@ class Trainer(DefaultTrainer):
     @classmethod
     def build_train_source_loader(cls, cfg):
         return build_detection_train_source_loader(cfg)
-        
+
     @classmethod
     def build_evaluator(cls, cfg, dataset_name, output_folder=None):
         """
@@ -217,7 +251,7 @@ def main(args):
     assert os.access(config_yaml, os.R_OK)
     assert os.access(ckpt_path, os.R_OK)
     print('load configuration from:', config_yaml)
-    
+
     DatasetCatalog.register('mscoco2017_train_remap', lambda: get_coco_dicts('train'))
     DatasetCatalog.register('mscoco2017_valid_remap', lambda: get_coco_dicts('valid'))
     MetadataCatalog.get('mscoco2017_train_remap').thing_classes = thing_classes
@@ -225,8 +259,14 @@ def main(args):
     MetadataCatalog.get('mscoco2017_valid_remap').evaluator_type = 'coco'
 
     dst_pseudo, dst_manual = 'intersection_pseudo_%s' % args.id, 'intersection_manual_%s' % args.id
-    DatasetCatalog.register(dst_pseudo, lambda: get_pseudo_dicts(args))
-    DatasetCatalog.register(dst_manual, lambda: get_manual_dicts(args))
+    if args.id in video_id_list:
+        DatasetCatalog.register(dst_pseudo, lambda: get_pseudo_dicts(args))
+        DatasetCatalog.register(dst_manual, lambda: get_manual_dicts(args))
+    elif args.id == 'compound':
+        DatasetCatalog.register(dst_pseudo, lambda: all_pseudo_dicts(args, args.batch_size * args.iters))
+        DatasetCatalog.register(dst_manual, lambda: all_annotation_dicts(args))
+    else:
+        raise NotImplementedError
     MetadataCatalog.get(dst_pseudo).thing_classes = thing_classes
     MetadataCatalog.get(dst_manual).thing_classes = thing_classes
     MetadataCatalog.get(dst_manual).evaluator_type = 'coco'
@@ -236,20 +276,17 @@ def main(args):
     cfg.MODEL.WEIGHTS = ckpt_path
     cfg.DATASETS.TRAIN_SOURCE = ('mscoco2017_train_remap',)
     cfg.DATASETS.TRAIN = (dst_pseudo,)
-    #cfg.DATASETS.TEST = (dst_manual,) # debug
+    # cfg.DATASETS.TEST = (dst_manual,) # debug
     cfg.DATASETS.TEST = ('mscoco2017_valid_remap', dst_manual)
 
-    #iters, eval_interval, cfg.SOLVER.IMS_PER_BATCH = 100, 51, 1 # debug
-    iters, eval_interval = 20000, 4010
-    lr, num_workers = 1e-4, 4
-
-    cfg.DATALOADER.NUM_WORKERS = num_workers
-    cfg.SOLVER.BASE_LR = lr
-    cfg.SOLVER.WARMUP_ITERS = iters // 10
+    cfg.DATALOADER.NUM_WORKERS = args.num_workers
+    cfg.SOLVER.BASE_LR = 1e-4
+    cfg.SOLVER.WARMUP_ITERS = args.iters // 10
     cfg.SOLVER.GAMMA = 0.5
-    cfg.SOLVER.STEPS = (iters // 3, iters * 2 // 3)
-    cfg.SOLVER.MAX_ITER = iters
-    cfg.TEST.EVAL_PERIOD = eval_interval
+    cfg.SOLVER.STEPS = (args.iters // 3, args.iters * 2 // 3)
+    cfg.SOLVER.MAX_ITER = args.iters
+    cfg.SOLVER.IMS_PER_BATCH = args.batch_size
+    cfg.TEST.EVAL_PERIOD = args.eval_interval
     cfg.freeze()
     print('load weights from:', cfg.MODEL.WEIGHTS)
 
@@ -272,7 +309,11 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Adaptation Script')
     parser.add_argument('--opt', type=str, help='option')
-    parser.add_argument('--id', type=str, help='video ID')
+    parser.add_argument('--id', type=str, default='', choices=video_id_list+['', 'compound'], help='video ID')
+    parser.add_argument('--iters', type=int, default=20000)
+    parser.add_argument('--eval_interval', type=int, default=4010)
+    parser.add_argument('--batch_size', default=2, type=int)
+    parser.add_argument('--num_workers', default=4, type=int)
     parser.add_argument('--ddp_num_gpus', type=int, default=1)
     parser.add_argument('--ddp_port', type=int, default=50152)
     args = parser.parse_args()
